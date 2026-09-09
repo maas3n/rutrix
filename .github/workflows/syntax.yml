@@ -1,0 +1,57 @@
+name: rutrix checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: |
+          bash -n rutrix.sh
+          bash -n scripts/install-user
+          bash -n scripts/install-rtorrent-0.16.22
+
+      - name: Check rutrix branding and safety model
+        run: |
+          grep -q 'VERSION="1.0.0"' rutrix.sh
+          grep -q 'REPO="maas3n/rutrix"' rutrix.sh
+          grep -q '^STATE_DIR=/var/lib/rutrix/users$' rutrix.sh
+          grep -q '^# Managed by rutrix$' conf/rtorrent.service
+          grep -q 'created_by_rutrix=' scripts/install-user
+          grep -q 'installed=0' scripts/install-user
+          grep -q 'installed=1' scripts/install-user
+          grep -q 'flock -n 9' rutrix.sh
+          grep -q "Type 'purge \$user'" rutrix.sh
+          grep -q 'deluser --remove-home' rutrix.sh
+          grep -q 'Removing remaining home directory' rutrix.sh
+          grep -q '/etc/rutrix/scripts/install-rtorrent-0.16.22' scripts/install-user
+          grep -q '/usr/local/bin/rutrix' rutrix.sh
+
+      - name: Check clean project tree
+        run: |
+          ! grep -R -nE 'rtinstDebianTrixie|rdebinst' --exclude-dir=.git .
+          ! grep -R -n 'arakasi72' --exclude=LICENSE --exclude-dir=.git .
+          grep -q 'Copyright (c) 2015 arakasi72' LICENSE
+          grep -q 'Copyright (c) 2026 maas3n' LICENSE
+          test ! -e scripts/rtadduser
+          test ! -e scripts/rtadmin
+          test ! -e scripts/rtupdate
+          test ! -e scripts/rtwebmin
+
+      - name: Check pinned rTorrent build policy
+        run: |
+          grep -q 'VERSION="0.16.22"' scripts/install-rtorrent-0.16.22
+          grep -q '08f6619dcd181ea5d48429ce027888f67a3e14e31135158112d3ec7dcaa240d9' scripts/install-rtorrent-0.16.22
+          grep -q '4b157f83d93fd6fd3741a018a7397485dec5c080cbf222b336749b7d5f8f63d6' scripts/install-rtorrent-0.16.22
+          grep -q -- '--with-xmlrpc-tinyxml2' scripts/install-rtorrent-0.16.22
+          ! grep -q -- '--with-xmlrpc-c' scripts/install-rtorrent-0.16.22
+          grep -q '^network.listen.port.range.set = ' conf/rtorrent.rc
+          grep -q '^network.http.max_total_connections.set = ' conf/rtorrent.rc
+          grep -A1 '^\[dump\]$' conf/ru.ini | grep -q 'enabled = no'
