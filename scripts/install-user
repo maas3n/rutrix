@@ -129,12 +129,33 @@ fi
 
 state_dir=/var/lib/rutrix/users
 state_file="$state_dir/$user"
+state_uid=""
+new_user=0
 
 if id "$user" >/dev/null 2>&1; then
   if [ "$user_from_option" -eq 1 ]; then
     echo "Using explicitly selected existing Unix user $user"
     if [ -r "$state_file" ] && grep -q '^created_by_rutrix=1$' "$state_file"; then
       created_by_rutrix=1
+      old_uid=$(sed -n 's/^uid=//p' "$state_file" | head -1)
+      current_uid=$(id -u "$user")
+      if [ -n "$old_uid" ]; then
+        if ! [[ "$old_uid" =~ ^[0-9]+$ ]]; then
+          echo "Refusing to continue: stored rutrix UID provenance for '$user' is invalid."
+          exit 1
+        fi
+        if [ "$old_uid" != "$current_uid" ]; then
+          echo "Refusing to continue: '$user' now has UID $current_uid but rutrix recorded UID $old_uid."
+          echo "This may indicate username reuse; stale ownership state will not be trusted."
+          exit 1
+        fi
+        state_uid="$old_uid"
+      else
+        echo "Legacy rutrix state for '$user' has no UID-bound provenance."
+        echo "Installation may continue, but PURGE will remain disabled for this legacy state."
+      fi
+    else
+      state_uid=$(id -u "$user")
     fi
   else
     echo "User $user already exists"
@@ -144,6 +165,7 @@ else
   echo "Creating dedicated Unix user $user"
   adduser --disabled-password --gecos "" "$user"
   created_by_rutrix=1
+  new_user=1
 fi
 
 home=$(getent passwd "$user" | cut -d: -f6)
@@ -151,10 +173,18 @@ if [ -z "$home" ] || [ ! -d "$home" ]; then
   echo "Unable to determine home directory for $user"
   exit 1
 fi
+account_uid=$(id -u "$user")
+if [ "$new_user" -eq 1 ]; then
+  state_uid="$account_uid"
+fi
+if [ "$created_by_rutrix" -eq 0 ]; then
+  state_uid="$account_uid"
+fi
 
 install -d -m 0750 /var/lib/rutrix "$state_dir"
 cat > "$state_file" <<EOF
 user=$user
+uid=$state_uid
 home=$home
 created_by_rutrix=$created_by_rutrix
 installed=0
