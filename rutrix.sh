@@ -638,7 +638,7 @@ prepare_install_tree() {
       elif [ -d "$SCRIPT_DIR/.git" ]; then
         echo "Local rutrix checkout has uncommitted changes; no release commit will be recorded for this installed tree."
       fi
-      if valid_commit "$local_commit" ]; then
+      if valid_commit "$local_commit"; then
         printf '%s\n' "$local_commit" > "$stage/.release-commit"
       fi
 
