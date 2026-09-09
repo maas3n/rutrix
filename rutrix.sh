@@ -14,6 +14,7 @@ SELECTED_USER=""
 ASSUME_YES=0
 STATE_DIR=/var/lib/rutrix/users
 DIAGNOSTIC_USER_FILE=/var/lib/rutrix/diagnostic_user
+INSTALL_DIR=/etc/rutrix
 
 usage() {
   cat <<EOF
@@ -223,13 +224,15 @@ write_state_status() {
 create_state_after_uninstall() {
   local user=$1
   local home=$2
-  local state_file
+  local state_file uid
 
   [ -n "$home" ] || return 0
   install -d -m 0750 /var/lib/rutrix "$STATE_DIR"
   state_file=$(state_file_for "$user")
+  uid=$(id -u "$user" 2>/dev/null || true)
   cat > "$state_file" <<EOF
 user=$user
+uid=$uid
 home=$home
 created_by_rutrix=0
 installed=0
@@ -319,12 +322,50 @@ confirm_user_action() {
   fi
 }
 
+verify_purge_home() {
+  local home=$1
+  local expected_uid=$2
+  local resolved owner target
+
+  [ -e "$home" ] || return 0
+
+  if [ -L "$home" ]; then
+    echo "Refusing to purge: home path is a symbolic link: $home"
+    return 1
+  fi
+  if ! command -v realpath >/dev/null 2>&1 || ! command -v stat >/dev/null 2>&1 || ! command -v findmnt >/dev/null 2>&1; then
+    echo "Refusing to purge: realpath, stat and findmnt are required for home safety checks."
+    return 1
+  fi
+
+  resolved=$(realpath -e -- "$home" 2>/dev/null || true)
+  if [ "$resolved" != "$home" ]; then
+    echo "Refusing to purge: home path does not resolve exactly to itself: $home"
+    return 1
+  fi
+
+  while IFS= read -r target; do
+    case "$target" in
+      "$home"|"$home"/*)
+        echo "Refusing to purge: a mounted filesystem exists at or below $target"
+        return 1
+        ;;
+    esac
+  done < <(findmnt -rn -o TARGET)
+
+  owner=$(stat -c '%u' -- "$home" 2>/dev/null || true)
+  if [ -z "$owner" ] || [ "$owner" != "$expected_uid" ]; then
+    echo "Refusing to purge: home owner UID '$owner' does not match recorded UID '$expected_uid'."
+    return 1
+  fi
+}
+
 remove_user() {
   require_root
 
   local action=$1
   local user=${2:-}
-  local unit service state_file home state_home created account_exists=0
+  local unit service state_file home state_home state_uid current_uid created account_exists=0
 
   if [ -z "$user" ]; then
     prompt_user "$action" || return 1
@@ -345,18 +386,22 @@ remove_user() {
   service="rtorrent-$user.service"
   home=""
   state_home=""
+  state_uid=""
   created=0
 
   if [ -r "$state_file" ]; then
     state_home=$(state_value "$state_file" home 2>/dev/null || true)
+    state_uid=$(state_value "$state_file" uid 2>/dev/null || true)
     state_created_by_rutrix "$state_file" && created=1
   fi
 
   if id "$user" >/dev/null 2>&1; then
     account_exists=1
     home=$(getent passwd "$user" | cut -d: -f6 || true)
+    current_uid=$(id -u "$user" 2>/dev/null || true)
   elif [ "$action" = "purge" ]; then
     home="$state_home"
+    current_uid=""
   fi
 
   if [ -f "$unit" ] && ! is_managed_service "$unit"; then
@@ -370,15 +415,27 @@ remove_user() {
       echo "rutrix cannot prove that it created this Unix account."
       return 1
     fi
+    if ! [[ "$state_uid" =~ ^[0-9]+$ ]]; then
+      echo "Refusing to purge '$user': rutrix state has no trusted recorded UID."
+      echo "Legacy state without UID-bound provenance is intentionally not auto-upgraded."
+      return 1
+    fi
     if [ "$state_home" != "/home/$user" ]; then
       echo "Refusing to purge '$user': recorded home '$state_home' is unexpected."
       return 1
     fi
-    if [ "$account_exists" -eq 1 ] && [ "$home" != "$state_home" ]; then
-      echo "Refusing to purge '$user': live home '$home' does not match recorded home '$state_home'."
-      return 1
+    if [ "$account_exists" -eq 1 ]; then
+      if [ "$home" != "$state_home" ]; then
+        echo "Refusing to purge '$user': live home '$home' does not match recorded home '$state_home'."
+        return 1
+      fi
+      if [ "$current_uid" != "$state_uid" ]; then
+        echo "Refusing to purge '$user': live UID '$current_uid' does not match recorded UID '$state_uid'."
+        return 1
+      fi
     fi
     home="$state_home"
+    verify_purge_home "$home" "$state_uid" || return 1
   else
     [ -n "$home" ] || home="$state_home"
   fi
@@ -386,7 +443,17 @@ remove_user() {
   confirm_user_action "$action" "$user" "$home" || return 1
 
   if is_managed_service "$unit"; then
-    systemctl disable --now "$service" >/dev/null 2>&1 || true
+    if systemctl is-active --quiet "$service"; then
+      if ! systemctl stop "$service"; then
+        echo "Refusing to continue: failed to stop $service."
+        return 1
+      fi
+    fi
+    if systemctl is-active --quiet "$service"; then
+      echo "Refusing to continue: $service is still running."
+      return 1
+    fi
+    systemctl disable "$service" >/dev/null 2>&1 || true
     rm -f "$unit"
     systemctl daemon-reload
   fi
@@ -404,6 +471,8 @@ remove_user() {
   fi
 
   if [ "$action" = "purge" ]; then
+    verify_purge_home "$home" "$state_uid" || return 1
+
     if [ "$account_exists" -eq 1 ]; then
       echo "Purging rutrix-created user $user and $home"
       deluser --remove-home "$user"
@@ -415,7 +484,8 @@ remove_user() {
       echo "Unix user '$user' is already absent; cleaning recorded rutrix home/state."
     fi
 
-    if [ -d "$home" ]; then
+    if [ -e "$home" ]; then
+      verify_purge_home "$home" "$state_uid" || return 1
       echo "Removing remaining home directory $home"
       rm -rf -- "$home"
     fi
@@ -456,64 +526,137 @@ valid_commit() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]]
 }
 
+install_tree_valid() {
+  local root=$1
+  [ -f "$root/rutrix.sh" ] &&
+  [ -f "$root/scripts/install-user" ] &&
+  [ -f "$root/scripts/install-rtorrent-0.16.22" ] &&
+  [ -f "$root/conf/rtorrent.rc" ] &&
+  [ -f "$root/conf/rtorrent.service" ] &&
+  [ -f "$root/conf/nginx-rutorrent" ] &&
+  [ -f "$root/conf/ru.ini" ]
+}
+
+install_tree_secure() {
+  local root=$1
+  install_tree_valid "$root" || return 1
+  [ -z "$(find "$root" \( ! -user root -o -perm /022 \) -print -quit 2>/dev/null)" ]
+}
+
+secure_install_tree() {
+  local root=$1
+  chown -R root:root "$root"
+  find "$root" -type d -exec chmod 0755 {} +
+  find "$root" -type f -exec chmod 0644 {} +
+  chmod 0755 "$root/rutrix.sh" "$root/scripts/install-user" "$root/scripts/install-rtorrent-0.16.22"
+}
+
+activate_install_tree() {
+  local stage=$1
+  local backup=""
+
+  install_tree_valid "$stage" || {
+    echo "Refusing to activate incomplete rutrix tree: $stage"
+    return 1
+  }
+  secure_install_tree "$stage"
+  install_tree_secure "$stage" || {
+    echo "Refusing to activate insecure rutrix tree: $stage"
+    return 1
+  }
+
+  if [ -e "$INSTALL_DIR" ]; then
+    backup=$(mktemp -d /etc/.rutrix.old.XXXXXX)
+    rmdir "$backup"
+    mv "$INSTALL_DIR" "$backup"
+  fi
+
+  if ! mv "$stage" "$INSTALL_DIR"; then
+    echo "Failed to activate replacement rutrix tree."
+    if [ -n "$backup" ] && [ -e "$backup" ]; then
+      mv "$backup" "$INSTALL_DIR" || true
+    fi
+    return 1
+  fi
+
+  [ -z "$backup" ] || rm -rf -- "$backup"
+}
+
 clone_installer_tree() {
   local commit=$1
-  local actual
+  local actual stage
 
   apt-get -qq update
   apt-get -yqq install git ca-certificates >/dev/null
-  rm -rf /etc/rutrix
-  git clone -q "$REPO_URL" /etc/rutrix
 
-  if [ -n "$commit" ]; then
-    git -C /etc/rutrix checkout -q "$commit"
-    actual=$(git -C /etc/rutrix rev-parse HEAD)
-    if [ "$actual" != "$commit" ]; then
-      echo "Release verification failed: expected $commit, got $actual"
-      rm -rf /etc/rutrix
-      exit 1
-    fi
-    printf '%s\n' "$commit" > /etc/rutrix/.release-commit
-    chmod 0644 /etc/rutrix/.release-commit
-  else
-    echo "WARNING: no release commit is pinned; using current main development code."
-    git -C /etc/rutrix checkout -q main
+  stage=$(mktemp -d /etc/.rutrix.new.XXXXXX)
+  if ! git clone -q "$REPO_URL" "$stage"; then
+    rm -rf -- "$stage"
+    echo "Failed to clone replacement rutrix tree; existing installation was left untouched."
+    return 1
   fi
 
-  rm -rf /etc/rutrix/.git
+  if [ -n "$commit" ]; then
+    if ! git -C "$stage" checkout -q "$commit"; then
+      rm -rf -- "$stage"
+      echo "Failed to check out pinned rutrix commit $commit; existing installation was left untouched."
+      return 1
+    fi
+    actual=$(git -C "$stage" rev-parse HEAD)
+    if [ "$actual" != "$commit" ]; then
+      echo "Release verification failed: expected $commit, got $actual"
+      rm -rf -- "$stage"
+      return 1
+    fi
+    printf '%s\n' "$commit" > "$stage/.release-commit"
+    chmod 0644 "$stage/.release-commit"
+  else
+    echo "WARNING: no release commit is pinned; using current main development code."
+    git -C "$stage" checkout -q main
+  fi
+
+  rm -rf "$stage/.git"
+  activate_install_tree "$stage"
 }
 
 prepare_install_tree() {
   require_root
 
-  local local_commit=""
+  local local_commit="" stage
 
   if [ -f "$SCRIPT_DIR/scripts/install-user" ] && [ -f "$SCRIPT_DIR/conf/rtorrent.rc" ]; then
-    if [ "$SCRIPT_DIR" != "/etc/rutrix" ]; then
-      rm -rf /etc/rutrix
-      install -d -m 0755 /etc/rutrix
-      cp -a "$SCRIPT_DIR/rutrix.sh" /etc/rutrix/
-      cp -a "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/conf" /etc/rutrix/
+    if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+      stage=$(mktemp -d /etc/.rutrix.new.XXXXXX)
+      cp -a "$SCRIPT_DIR/rutrix.sh" "$stage/"
+      cp -a "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/conf" "$stage/"
       for extra in README.md LICENSE VERSION; do
-        [ -e "$SCRIPT_DIR/$extra" ] && cp -a "$SCRIPT_DIR/$extra" /etc/rutrix/
+        [ -e "$SCRIPT_DIR/$extra" ] && cp -a "$SCRIPT_DIR/$extra" "$stage/"
       done
 
-      if [ -d "$SCRIPT_DIR/.git" ]; then
+      if [ -d "$SCRIPT_DIR/.git" ] && [ -z "$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null || true)" ]; then
         local_commit=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || true)
+      elif [ -d "$SCRIPT_DIR/.git" ]; then
+        echo "Local rutrix checkout has uncommitted changes; no release commit will be recorded for this installed tree."
       fi
       if valid_commit "$local_commit"; then
-        printf '%s\n' "$local_commit" > /etc/rutrix/.release-commit
-      elif valid_commit "$BOOTSTRAP_COMMIT"; then
-        printf '%s\n' "$BOOTSTRAP_COMMIT" > /etc/rutrix/.release-commit
+        printf '%s\n' "$local_commit" > "$stage/.release-commit"
       fi
+
+      activate_install_tree "$stage"
+    elif ! install_tree_secure "$INSTALL_DIR"; then
+      echo "Installed rutrix tree is incomplete, non-root-owned or writable; rebuilding from the pinned source tree."
+      clone_installer_tree "$BOOTSTRAP_COMMIT"
     fi
-  elif [ ! -f /etc/rutrix/scripts/install-user ]; then
+  elif ! install_tree_secure "$INSTALL_DIR"; then
     clone_installer_tree "$BOOTSTRAP_COMMIT"
   fi
 
-  chmod 755 /etc/rutrix/rutrix.sh /etc/rutrix/scripts/install-user 2>/dev/null || true
-  chmod 755 /etc/rutrix/scripts/install-rtorrent-0.16.22 2>/dev/null || true
-  ln -sfn /etc/rutrix/rutrix.sh /usr/local/bin/rutrix
+  install_tree_secure "$INSTALL_DIR" || {
+    echo "rutrix install tree failed ownership/content validation"
+    exit 1
+  }
+
+  ln -sfn "$INSTALL_DIR/rutrix.sh" /usr/local/bin/rutrix
 }
 
 run_install() {
