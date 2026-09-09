@@ -117,6 +117,16 @@ if [ "$user" = "root" ]; then
   exit 1
 fi
 
+# Verify all configured APT repositories before creating or modifying a Unix
+# user. A broken unrelated third-party repository should abort cleanly without
+# leaving a partial rutrix account behind.
+echo "Checking APT package repositories"
+if ! apt-get -qq update; then
+  echo "APT repository update failed. No rutrix Unix user has been created or modified."
+  echo "Fix or temporarily disable the failing APT repository, then run rutrix again."
+  exit 1
+fi
+
 state_dir=/var/lib/rutrix/users
 state_file="$state_dir/$user"
 
@@ -166,9 +176,6 @@ if [ -z "$serverip" ]; then
   serverip=$(hostname -I 2>/dev/null | awk '{print $1}')
 fi
 [ -n "$serverip" ] || serverip="127.0.0.1"
-
-echo "Updating package lists"
-apt-get -qq update
 
 export DEBIAN_FRONTEND=noninteractive
 packages="acl ca-certificates curl git iproute2 nginx apache2-utils openssl php8.4-fpm php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml php8.4-zip php8.4-xmlrpc"
