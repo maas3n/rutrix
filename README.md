@@ -161,13 +161,12 @@ Useful post-install checks:
 strings /usr/local/bin/rtorrent | grep -F system.listMethods
 sudo -u www-data sh -c 'cd /var/www/rutorrent && php env_check.php'
 ```
-## Support rutrix
-If rutrix is useful to you and you'd like to support its development, Bitcoin donations are appreciated but entirely optional.
-<div align="left">
-  
-<img src="https://upload.wikimedia.org/wikipedia/commons/4/46/Bitcoin.svg" width="14" height="14"> <small>**BTC:** `bc1q79hj2zukfmm75278a7wssjmexanuhvs5nequel`</small>
 
-</div>
+## Support rutrix
+
+If rutrix is useful to you and you'd like to support its development, Bitcoin donations are appreciated but entirely optional.
+
+<img src="https://upload.wikimedia.org/wikipedia/commons/4/46/Bitcoin.svg" width="14" height="14"> **BTC:** `bc1q79hj2zukfmm75278a7wssjmexanuhvs5nequel`
 
 ## License
 
