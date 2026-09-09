@@ -36,13 +36,14 @@ After the first install, run:
 sudo rutrix
 ```
 
-The standalone `rutrix.sh` bootstrap is pinned to a tested rutrix source tree rather than silently installing an arbitrary future revision.
+The standalone `rutrix.sh` bootstrap is pinned to a tested rutrix source tree rather than silently installing an arbitrary future revision. When a freshly downloaded standalone wrapper pins a different commit than the currently installed `/etc/rutrix/.release-commit`, rutrix refreshes the installed tree to that pinned commit before running `install-user`.
 
 Before a new Unix user is created or an existing user is modified, rutrix validates the configured APT repositories with `apt-get update`. If an unrelated third-party repository is broken or inconsistent, installation stops before creating a partial rutrix account.
 
 ### Safety boundaries
 
 - `/etc/rutrix` is constructed in a staging directory, checked for all required files, forced to `root:root`, and rejected if group/other-writable before it replaces the live install tree. Clone/checkout failures leave the previous tree untouched, and activation has rollback handling.
+- A freshly downloaded standalone wrapper compares `/etc/rutrix/.release-commit` with its `BOOTSTRAP_COMMIT`; a valid-but-older installed tree is refreshed before any user installation proceeds.
 - rutrix-created accounts record the Unix UID as part of destructive-operation provenance. PURGE refuses a live account whose UID does not match the recorded UID, preventing stale state from authorizing deletion after username reuse.
 - Legacy rutrix state that predates UID recording is intentionally not auto-upgraded for PURGE. The installation may continue to run, but destructive deletion is refused when identity cannot be proven.
 - Before deleting a home directory, PURGE verifies the canonical path, recorded owner UID, and refuses symbolic links or any mount/submount at or below the home path.
@@ -69,6 +70,7 @@ rutrix v1.0.0 has been tested on a real Debian 13 (Trixie) system, including:
 - mount/submount and canonical-path checks before destructive home removal
 - root-owned, staged `/etc/rutrix` replacement with rollback on activation failure
 - mandatory rTorrent service-stop verification before teardown
+- standalone wrapper refresh of an older valid `/etc/rutrix` tree before user installation
 
 ## Menu
 
