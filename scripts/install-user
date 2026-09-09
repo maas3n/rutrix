@@ -1,0 +1,323 @@
+#!/bin/bash
+
+# Minimal Debian 13 installer for rTorrent + ruTorrent + nginx.
+# The first run installs the shared web stack and one dedicated rTorrent user.
+# Later runs reuse the shared stack and add another dedicated rTorrent user.
+# rTorrent/libtorrent 0.16.22 are built from pinned upstream release tarballs.
+
+set -euo pipefail
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+user=""
+webpass=""
+forceyes=0
+user_from_option=0
+created_by_rutrix=0
+
+usage() {
+  cat <<'EOF'
+Usage: rutrix [-y] [-u user] [-w web-password]
+
+  -u USER       Dedicated Unix user for rTorrent. Existing users are allowed
+                only when explicitly supplied with -u.
+  -w PASSWORD   Password used for nginx basic authentication
+  -y            Non-interactive; requires both -u and -w
+  -h            Show this help
+
+Run "sudo rutrix" and choose Install / add user from the menu to create a
+new dedicated rTorrent/ruTorrent user. The sudo/admin account is never selected
+automatically.
+
+The first run installs the shared nginx/PHP/ruTorrent stack and builds pinned
+libtorrent/rTorrent 0.16.22 with tinyxml2 XMLRPC. Later runs reuse that stack
+and binary and add another isolated rTorrent user/service.
+
+Warning: -w places the web password in command-line history/process listings.
+Prefer the interactive password prompt when possible.
+EOF
+}
+
+while getopts ":u:w:yh" opt; do
+  case "$opt" in
+    u) user="$OPTARG"; user_from_option=1 ;;
+    w) webpass="$OPTARG" ;;
+    y) forceyes=1 ;;
+    h) usage; exit 0 ;;
+    *) usage; exit 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+if [ "$#" -ne 0 ]; then
+  echo "Unexpected argument: $1"
+  usage
+  exit 1
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Must be run as root or with sudo"
+  exit 1
+fi
+
+if [ ! -r /etc/os-release ]; then
+  echo "Unable to determine operating system"
+  exit 1
+fi
+
+. /etc/os-release
+if [ "$ID" != "debian" ] || [ "${VERSION_ID%%.*}" != "13" ]; then
+  echo "This installer supports Debian 13 (trixie) only"
+  echo "Detected: ${PRETTY_NAME:-unknown}"
+  exit 1
+fi
+
+echo "Detected ${PRETTY_NAME}"
+
+if [ "$forceyes" -eq 1 ] && { [ -z "$user" ] || [ -z "$webpass" ]; }; then
+  echo "-y requires both -u USER and -w PASSWORD"
+  exit 1
+fi
+
+valid_user() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]*$ ]]
+}
+
+if [ -z "$user" ]; then
+  echo
+  echo "Create a dedicated Unix user for rTorrent/ruTorrent."
+  echo "Your sudo/admin account will not be used automatically."
+  while true; do
+    read -r -p "New rTorrent user: " user
+    if ! valid_user "$user"; then
+      echo "Invalid Unix user name. Use lowercase letters, numbers, _ or -."
+      user=""
+      continue
+    fi
+    if [ "$user" = "root" ]; then
+      echo "root cannot be used as the rTorrent user"
+      user=""
+      continue
+    fi
+    if id "$user" >/dev/null 2>&1; then
+      echo "User '$user' already exists. Enter a new dedicated username."
+      echo "To deliberately configure an existing account, use: sudo rutrix -u $user"
+      user=""
+      continue
+    fi
+    break
+  done
+fi
+
+if ! valid_user "$user"; then
+  echo "Invalid Unix user name: $user"
+  exit 1
+fi
+if [ "$user" = "root" ]; then
+  echo "root cannot be used as the rTorrent user"
+  exit 1
+fi
+
+state_dir=/var/lib/rutrix/users
+state_file="$state_dir/$user"
+
+if id "$user" >/dev/null 2>&1; then
+  if [ "$user_from_option" -eq 1 ]; then
+    echo "Using explicitly selected existing Unix user $user"
+    if [ -r "$state_file" ] && grep -q '^created_by_rutrix=1$' "$state_file"; then
+      created_by_rutrix=1
+    fi
+  else
+    echo "User $user already exists"
+    exit 1
+  fi
+else
+  echo "Creating dedicated Unix user $user"
+  adduser --disabled-password --gecos "" "$user"
+  created_by_rutrix=1
+fi
+
+home=$(getent passwd "$user" | cut -d: -f6)
+if [ -z "$home" ] || [ ! -d "$home" ]; then
+  echo "Unable to determine home directory for $user"
+  exit 1
+fi
+
+install -d -m 0750 /var/lib/rutrix "$state_dir"
+cat > "$state_file" <<EOF
+user=$user
+home=$home
+created_by_rutrix=$created_by_rutrix
+installed=0
+EOF
+chmod 600 "$state_file"
+
+if [ -z "$webpass" ]; then
+  read -r -s -p "ruTorrent web password for $user: " webpass
+  echo
+  while [ -z "$webpass" ]; do
+    echo "Password cannot be blank."
+    read -r -s -p "ruTorrent web password for $user: " webpass
+    echo
+  done
+fi
+
+serverip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+if [ -z "$serverip" ]; then
+  serverip=$(hostname -I 2>/dev/null | awk '{print $1}')
+fi
+[ -n "$serverip" ] || serverip="127.0.0.1"
+
+echo "Updating package lists"
+apt-get -qq update
+
+export DEBIAN_FRONTEND=noninteractive
+packages="acl ca-certificates curl git iproute2 nginx apache2-utils openssl php8.4-fpm php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml php8.4-zip php8.4-xmlrpc"
+
+echo "Installing/checking minimal ruTorrent web dependencies"
+apt-get -y install $packages
+
+bash /etc/rutrix/scripts/install-rtorrent-0.16.22
+
+if ! getent group rutorrent >/dev/null; then
+  groupadd --system rutorrent
+fi
+usermod -a -G rutorrent "$user"
+usermod -a -G rutorrent www-data
+setfacl -m g:rutorrent:--x "$home"
+
+install -d -o "$user" -g rutorrent -m 2770 "$home/rtorrent"
+install -d -o "$user" -g rutorrent -m 2770 "$home/rtorrent/.session"
+install -d -o "$user" -g rutorrent -m 2770 "$home/rtorrent/download"
+install -d -o "$user" -g rutorrent -m 2770 "$home/rtorrent/watch"
+
+cp -f /etc/rutrix/conf/rtorrent.rc "$home/.rtorrent.rc"
+sed -i "s|<user home>|$home|g" "$home/.rtorrent.rc"
+sed -i "s|<user name>|$user|g" "$home/.rtorrent.rc"
+chown "$user:$user" "$home/.rtorrent.rc"
+chmod 600 "$home/.rtorrent.rc"
+
+if [ ! -d /var/www/rutorrent ]; then
+  echo "Installing shared ruTorrent web application"
+  rutag=$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)
+  if [ -n "$rutag" ]; then
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$rutag" https://github.com/Novik/ruTorrent.git /var/www/rutorrent
+  else
+    git clone -q --depth 1 https://github.com/Novik/ruTorrent.git /var/www/rutorrent
+  fi
+else
+  echo "Existing ruTorrent installation detected; reusing shared web stack"
+fi
+
+php_literal() {
+  php -r 'echo var_export($argv[1], true);' "$1"
+}
+
+php_home=$(php_literal "$home")
+php_top=$(php_literal "$home/rtorrent")
+php_scgi=$(php_literal "unix://$home/rtorrent/.session/rpc.sock")
+
+mkdir -p "/var/www/rutorrent/conf/users/$user/plugins"
+cat > "/var/www/rutorrent/conf/users/$user/config.php" <<EOF
+<?php
+\$homeDirectory = $php_home;
+\$topDirectory = $php_top;
+\$scgi_port = 0;
+\$scgi_host = $php_scgi;
+\$XMLRPCMountPoint = "/RPC2";
+?>
+EOF
+
+cat > /var/www/rutorrent/conf/config.local.php <<EOF
+<?php
+\$topDirectory = $php_top;
+\$scgi_port = 0;
+\$scgi_host = $php_scgi;
+\$localHostedMode = true;
+\$profileMask = 0770;
+?>
+EOF
+
+cp -f /etc/rutrix/conf/ru.ini /var/www/rutorrent/conf/plugins.ini
+chown -R www-data:rutorrent /var/www/rutorrent
+find /var/www/rutorrent -type d -exec chmod 2750 {} +
+find /var/www/rutorrent -type f -exec chmod 0640 {} +
+
+cat > /etc/php/8.4/fpm/conf.d/99-rutorrent.ini <<'EOF'
+upload_max_filesize = 40M
+post_max_size = 40M
+memory_limit = 256M
+max_execution_time = 300
+EOF
+
+install -d -m 0700 /etc/nginx/ssl
+if [ ! -s /etc/nginx/ssl/rutorrent.key ] || [ ! -s /etc/nginx/ssl/rutorrent.crt ]; then
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+    -keyout /etc/nginx/ssl/rutorrent.key \
+    -out /etc/nginx/ssl/rutorrent.crt \
+    -subj "/CN=$serverip" >/dev/null 2>&1
+  chmod 600 /etc/nginx/ssl/rutorrent.key
+  chmod 644 /etc/nginx/ssl/rutorrent.crt
+fi
+
+if [ -f /etc/nginx/.htpasswd-rutorrent ]; then
+  htpasswd -b /etc/nginx/.htpasswd-rutorrent "$user" "$webpass" >/dev/null
+else
+  htpasswd -bc /etc/nginx/.htpasswd-rutorrent "$user" "$webpass" >/dev/null
+fi
+chown root:www-data /etc/nginx/.htpasswd-rutorrent
+chmod 640 /etc/nginx/.htpasswd-rutorrent
+
+sed \
+  -e "s|<server ip>|$serverip|g" \
+  -e "s|<php socket>|/run/php/php8.4-fpm.sock|g" \
+  /etc/rutrix/conf/nginx-rutorrent > /etc/nginx/sites-available/rutorrent
+ln -sfn /etc/nginx/sites-available/rutorrent /etc/nginx/sites-enabled/rutorrent
+
+service_name="rtorrent-$user.service"
+sed \
+  -e "s|<user name>|$user|g" \
+  -e "s|<user home>|$home|g" \
+  /etc/rutrix/conf/rtorrent.service > "/etc/systemd/system/$service_name"
+
+systemctl daemon-reload
+systemctl enable php8.4-fpm >/dev/null
+systemctl restart php8.4-fpm
+nginx -t
+systemctl enable nginx >/dev/null
+systemctl restart nginx
+systemctl enable "$service_name" >/dev/null
+if systemctl is-active --quiet "$service_name"; then
+  systemctl restart "$service_name"
+else
+  systemctl start "$service_name"
+fi
+
+if ! systemctl is-active --quiet "$service_name"; then
+  echo "rTorrent service failed to start"
+  systemctl --no-pager --full status "$service_name" || true
+  exit 1
+fi
+
+tmp_state=$(mktemp "${state_file}.XXXXXX")
+grep -v '^installed=' "$state_file" > "$tmp_state" || true
+echo "installed=1" >> "$tmp_state"
+chmod 600 "$tmp_state"
+mv -f "$tmp_state" "$state_file"
+
+printf '%s\n' "$user" > /var/lib/rutrix/diagnostic_user
+chmod 0640 /var/lib/rutrix/diagnostic_user
+
+cat <<EOF
+
+User setup complete
+
+  rTorrent:  0.16.22 (/usr/local/bin/rtorrent)
+  ruTorrent: https://$serverip/rutorrent/
+  Web user:  $user
+  Web pass:  configured
+  Downloads: $home/rtorrent/download
+  Watch dir: $home/rtorrent/watch
+  Service:   $service_name
+
+Run sudo rutrix again whenever you want to add another dedicated user or manage the installation.
+EOF
