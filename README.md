@@ -40,6 +40,14 @@ The standalone `rutrix.sh` bootstrap is pinned to a tested rutrix source tree ra
 
 Before a new Unix user is created or an existing user is modified, rutrix validates the configured APT repositories with `apt-get update`. If an unrelated third-party repository is broken or inconsistent, installation stops before creating a partial rutrix account.
 
+### Safety boundaries
+
+- `/etc/rutrix` is constructed in a staging directory, checked for all required files, forced to `root:root`, and rejected if group/other-writable before it replaces the live install tree. Clone/checkout failures leave the previous tree untouched, and activation has rollback handling.
+- rutrix-created accounts record the Unix UID as part of destructive-operation provenance. PURGE refuses a live account whose UID does not match the recorded UID, preventing stale state from authorizing deletion after username reuse.
+- Legacy rutrix state that predates UID recording is intentionally not auto-upgraded for PURGE. The installation may continue to run, but destructive deletion is refused when identity cannot be proven.
+- Before deleting a home directory, PURGE verifies the canonical path, recorded owner UID, and refuses symbolic links or any mount/submount at or below the home path.
+- A rutrix-managed rTorrent service must be confirmed inactive before its unit is removed or account/home deletion proceeds.
+
 ## Validated on Debian 13
 
 rutrix v1.0.0 has been tested on a real Debian 13 (Trixie) system, including:
@@ -57,6 +65,10 @@ rutrix v1.0.0 has been tested on a real Debian 13 (Trixie) system, including:
 - continued purge eligibility for rutrix-created users after uninstall
 - guarded purge removing the rutrix-created Unix account, complete home directory and rutrix state
 - APT repository preflight before Unix-user creation or modification
+- UID-bound purge provenance and username-reuse protection
+- mount/submount and canonical-path checks before destructive home removal
+- root-owned, staged `/etc/rutrix` replacement with rollback on activation failure
+- mandatory rTorrent service-stop verification before teardown
 
 ## Menu
 
@@ -71,7 +83,7 @@ rutrix 1.0.0
 
 Uninstall removes the selected user's rTorrent/ruTorrent setup while preserving the Unix account and complete home directory.
 
-PURGE is deliberately destructive. It is allowed only when rutrix can prove it created the Unix account. The operator must type `purge USER`, and rutrix verifies both the Unix account and recorded `/home/USER` path are gone before reporting success.
+PURGE is deliberately destructive. It is allowed only when rutrix can prove it created the Unix account and that the current Unix UID still matches the identity recorded by rutrix. The operator must type `purge USER`; rutrix also rejects unexpected paths, symlinks, mounts/submounts, and owner-UID mismatches before deletion.
 
 ## Optional arguments
 
@@ -99,6 +111,16 @@ rutrix uses:
 /var/lib/rutrix/users/
 /var/lib/rutrix/diagnostic_user
 /usr/local/bin/rutrix
+```
+
+A rutrix user state file records at least:
+
+```text
+user=USER
+uid=UID
+home=/home/USER
+created_by_rutrix=0|1
+installed=0|1
 ```
 
 Each managed rTorrent user gets:
