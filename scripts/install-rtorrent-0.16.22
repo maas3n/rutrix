@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Build and install matching libtorrent/rTorrent 0.16.22 under /usr/local.
+# Release assets and SHA-256 values are pinned to the upstream v0.16.22 release.
+# rTorrent uses its bundled tinyxml2 XMLRPC implementation for ruTorrent and
+# future XMLRPC clients such as Sonarr/Radarr.
+
+set -euo pipefail
+
+VERSION="0.16.22"
+BASE_URL="https://github.com/rakshasa/rtorrent/releases/download/v${VERSION}"
+LIBTORRENT_TARBALL="libtorrent-${VERSION}.tar.gz"
+RTORRENT_TARBALL="rtorrent-${VERSION}.tar.gz"
+LIBTORRENT_SHA256="08f6619dcd181ea5d48429ce027888f67a3e14e31135158112d3ec7dcaa240d9"
+RTORRENT_SHA256="4b157f83d93fd6fd3741a018a7397485dec5c080cbf222b336749b7d5f8f63d6"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Must be run as root or with sudo"
+  exit 1
+fi
+
+installed_version() {
+  if [ -x /usr/local/bin/rtorrent ]; then
+    /usr/local/bin/rtorrent -h 2>&1 | sed -n 's/^Rakshasa.* version \([0-9.]*\)\.$/\1/p' | head -1
+  fi
+}
+
+multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || true)
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig${multiarch:+:/usr/local/lib/$multiarch/pkgconfig}:${PKG_CONFIG_PATH:-}"
+
+installed_libtorrent_version() {
+  pkg-config --modversion libtorrent 2>/dev/null || true
+}
+
+# system.listMethods is compiled only for rTorrent's tinyxml2 XMLRPC backend.
+tinyxml2_backend_installed() {
+  [ -x /usr/local/bin/rtorrent ] && grep -aFq 'system.listMethods' /usr/local/bin/rtorrent
+}
+
+if [ "$(installed_version)" = "$VERSION" ] && tinyxml2_backend_installed; then
+  echo "rTorrent $VERSION with tinyxml2 RPC is already installed in /usr/local/bin"
+  exit 0
+fi
+
+if [ -n "$(installed_version)" ]; then
+  echo "Upgrading rTorrent $(installed_version) to $VERSION"
+fi
+
+echo "Installing build dependencies for rTorrent $VERSION"
+apt-get -y install \
+  build-essential autoconf automake libtool pkg-config \
+  libcurl4-openssl-dev libncurses-dev libssl-dev zlib1g-dev
+
+workdir=$(mktemp -d /tmp/rtorrent-0.16.22.XXXXXX)
+trap 'rm -rf "$workdir"' EXIT
+cd "$workdir"
+
+echo "Downloading pinned rTorrent $VERSION release sources"
+curl -fL --retry 3 -o "$LIBTORRENT_TARBALL" "$BASE_URL/$LIBTORRENT_TARBALL"
+curl -fL --retry 3 -o "$RTORRENT_TARBALL" "$BASE_URL/$RTORRENT_TARBALL"
+
+echo "$LIBTORRENT_SHA256  $LIBTORRENT_TARBALL" | sha256sum -c -
+echo "$RTORRENT_SHA256  $RTORRENT_TARBALL" | sha256sum -c -
+
+tar -xzf "$LIBTORRENT_TARBALL"
+tar -xzf "$RTORRENT_TARBALL"
+
+jobs=$(nproc 2>/dev/null || echo 2)
+[ "$jobs" -gt 1 ] && jobs=$((jobs - 1))
+[ "$jobs" -ge 1 ] || jobs=1
+
+if [ "$(installed_libtorrent_version)" = "$VERSION" ]; then
+  echo "libtorrent $VERSION is already installed under /usr/local; reusing it"
+else
+  echo "Building libtorrent $VERSION"
+  cd "$workdir/libtorrent-$VERSION"
+  if [ ! -x ./configure ]; then
+    autoreconf -ivf
+  fi
+  ./configure --prefix=/usr/local
+  make -j"$jobs"
+  make install
+  ldconfig
+fi
+
+if [ "$(installed_libtorrent_version)" != "$VERSION" ]; then
+  echo "libtorrent verification failed; expected $VERSION, got '$(installed_libtorrent_version)'"
+  exit 1
+fi
+
+echo "Building rTorrent $VERSION with bundled tinyxml2 XMLRPC support"
+cd "$workdir/rtorrent-$VERSION"
+if [ ! -x ./configure ]; then
+  autoreconf -ivf
+fi
+./configure --prefix=/usr/local --with-xmlrpc-tinyxml2
+make -j"$jobs"
+make install
+ldconfig
+
+actual=$(installed_version)
+if [ "$actual" != "$VERSION" ]; then
+  echo "rTorrent build verification failed; expected $VERSION, got '${actual:-unknown}'"
+  exit 1
+fi
+
+if ! tinyxml2_backend_installed; then
+  echo "rTorrent build verification failed; tinyxml2 XMLRPC backend was not detected"
+  exit 1
+fi
+
+if dpkg-query -W -f='${Status}' rtorrent 2>/dev/null | grep -q 'ok installed'; then
+  echo "Note: Debian's rtorrent package is still installed at /usr/bin/rtorrent"
+  echo "rutrix services use /usr/local/bin/rtorrent $VERSION"
+fi
+
+hash -r 2>/dev/null || true
+
+echo "Installed rTorrent $VERSION with tinyxml2 RPC at /usr/local/bin/rtorrent"
+/usr/local/bin/rtorrent -h 2>&1 | head -1
