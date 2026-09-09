@@ -36,8 +36,8 @@ jobs:
 
       - name: Check clean project tree
         run: |
-          ! grep -R -nE 'rtinstDebianTrixie|rdebinst' --exclude-dir=.git .
-          ! grep -R -n 'arakasi72' --exclude=LICENSE --exclude-dir=.git .
+          ! grep -R -nE 'rtinstDebianTrixie|rdebinst' --exclude=syntax.yml --exclude-dir=.git .
+          ! grep -R -n 'arakasi72' --exclude=LICENSE --exclude=syntax.yml --exclude-dir=.git .
           grep -q 'Copyright (c) 2015 arakasi72' LICENSE
           grep -q 'Copyright (c) 2026 maas3n' LICENSE
           test ! -e scripts/rtadduser
