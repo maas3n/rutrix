@@ -10,12 +10,6 @@ Maintained by **maas3n**. The rutrix-specific implementation, hardening, release
 
 Release: https://github.com/maas3n/rutrix/releases/tag/v1.0.0
 
-The v1.0.0 tag targets the validated release commit:
-
-```text
-1509a5f4436dc0f0356ff7f231f4bbfe8f9913fd
-```
-
 ## Stack
 
 - rTorrent **0.16.22**
@@ -42,7 +36,9 @@ After the first install, run:
 sudo rutrix
 ```
 
-The standalone `rutrix.sh` bootstrap is pinned to the tested rutrix release tree rather than silently installing an arbitrary future revision.
+The standalone `rutrix.sh` bootstrap is pinned to a tested rutrix source tree rather than silently installing an arbitrary future revision.
+
+Before a new Unix user is created or an existing user is modified, rutrix validates the configured APT repositories with `apt-get update`. If an unrelated third-party repository is broken or inconsistent, installation stops before creating a partial rutrix account.
 
 ## Validated on Debian 13
 
@@ -60,6 +56,7 @@ rutrix v1.0.0 has been tested on a real Debian 13 (Trixie) system, including:
 - removal of uninstalled users from the uninstall list
 - continued purge eligibility for rutrix-created users after uninstall
 - guarded purge removing the rutrix-created Unix account, complete home directory and rutrix state
+- APT repository preflight before Unix-user creation or modification
 
 ## Menu
 
