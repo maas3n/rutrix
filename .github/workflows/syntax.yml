@@ -22,6 +22,7 @@ jobs:
         run: |
           grep -q 'VERSION="1.0.0"' rutrix.sh
           grep -q 'REPO="maas3n/rutrix"' rutrix.sh
+          grep -Eq '^BOOTSTRAP_COMMIT="[0-9a-f]{40}"$' rutrix.sh
           grep -q '^STATE_DIR=/var/lib/rutrix/users$' rutrix.sh
           grep -q '^# Managed by rutrix$' conf/rtorrent.service
           grep -q 'created_by_rutrix=' scripts/install-user
