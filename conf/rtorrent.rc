@@ -1,0 +1,38 @@
+# Minimal rTorrent 0.16.22 configuration for Debian 13 rutrix.
+# Installed as ~/.rtorrent.rc with placeholders replaced by rutrix.
+
+method.insert = cfg.basedir, private|const|string, (cat,"<user home>/rtorrent/")
+method.insert = cfg.watch, private|const|string, (cat,(cfg.basedir),"watch/")
+
+session.path.set = (cat,(cfg.basedir),".session")
+directory.default.set = (cat,(cfg.basedir),"download")
+
+system.daemon.set = true
+system.umask.set = 0007
+
+schedule = watch_directory,5,5,((load.start,(cat,(cfg.watch),"*.torrent")))
+
+throttle.global_down.max_rate.set_kb = 0
+throttle.global_up.max_rate.set_kb = 0
+throttle.max_downloads.global.set = 100
+throttle.max_uploads.global.set = 100
+throttle.min_peers.normal.set = 20
+throttle.max_peers.normal.set = 100
+throttle.min_peers.seed.set = -1
+throttle.max_peers.seed.set = -1
+
+network.listen.port.range.set = 51001-51250
+network.listen.port.random.set = yes
+dht.mode.set = disable
+protocol.pex.set = no
+trackers.use_udp.set = yes
+protocol.encryption.set = allow_incoming,enable_retry,prefer_plaintext
+
+network.max_open_files.set = 4096
+network.max_open_sockets.set = 1536
+network.http.max_total_connections.set = 48
+network.http.ssl_verify_peer.set = 1
+
+network.scgi.open_local = (cat,(session.path),"/rpc.sock")
+
+execute = {sh,-c,/usr/bin/php /var/www/rutorrent/php/initplugins.php <user name> &}
