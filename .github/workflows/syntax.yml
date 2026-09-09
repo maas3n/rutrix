@@ -28,22 +28,29 @@ jobs:
           grep -q '^# Managed by rutrix$' conf/rtorrent.service
           grep -q 'created_by_rutrix=' scripts/install-user
           grep -q 'uid=\$state_uid' scripts/install-user
+          grep -q 'stored rutrix UID provenance' scripts/install-user
+          grep -q 'username reuse' scripts/install-user
           grep -q 'installed=0' scripts/install-user
           grep -q 'installed=1' scripts/install-user
           grep -q 'flock -n 9' rutrix.sh
           grep -q "Type 'purge \$user'" rutrix.sh
-          grep -q 'deluser --remove-home' rutrix.sh
+          grep -q 'trusted recorded UID' rutrix.sh
           grep -q 'live UID' rutrix.sh
           grep -q 'Legacy state without UID-bound provenance' rutrix.sh
           grep -q 'findmnt -rn -o TARGET' rutrix.sh
           grep -q 'home owner UID' rutrix.sh
           grep -q 'systemctl is-active --quiet' rutrix.sh
-          grep -q 'still running' rutrix.sh
-          grep -q 'chown -R root:root' rutrix.sh
+          grep -q 'systemctl stop "\$service"' rutrix.sh
+          grep -q 'is still running' rutrix.sh
+          grep -q 'deluser --remove-home' rutrix.sh
+          grep -q 'Removing remaining home directory' rutrix.sh
           grep -q '/etc/.rutrix.new.XXXXXX' rutrix.sh
+          grep -q 'chown -R root:root' rutrix.sh
           grep -q 'install_tree_secure' rutrix.sh
           grep -q 'existing installation was left untouched' rutrix.sh
-          grep -q 'Removing remaining home directory' rutrix.sh
+          grep -q 'installed_commit=$(cat "\$INSTALL_DIR/.release-commit"' rutrix.sh
+          grep -q '\[ "\$installed_commit" != "\$BOOTSTRAP_COMMIT" \]' rutrix.sh
+          grep -q 'Refreshing installed rutrix tree' rutrix.sh
           grep -q '/etc/rutrix/scripts/install-rtorrent-0.16.22' scripts/install-user
           grep -q '/usr/local/bin/rutrix' rutrix.sh
 

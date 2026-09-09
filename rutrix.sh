@@ -622,7 +622,7 @@ clone_installer_tree() {
 prepare_install_tree() {
   require_root
 
-  local local_commit="" stage
+  local local_commit="" stage installed_commit=""
 
   if [ -f "$SCRIPT_DIR/scripts/install-user" ] && [ -f "$SCRIPT_DIR/conf/rtorrent.rc" ]; then
     if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
@@ -647,8 +647,18 @@ prepare_install_tree() {
       echo "Installed rutrix tree is incomplete, non-root-owned or writable; rebuilding from the pinned source tree."
       clone_installer_tree "$BOOTSTRAP_COMMIT"
     fi
-  elif ! install_tree_secure "$INSTALL_DIR"; then
-    clone_installer_tree "$BOOTSTRAP_COMMIT"
+  else
+    if [ -r "$INSTALL_DIR/.release-commit" ]; then
+      installed_commit=$(cat "$INSTALL_DIR/.release-commit" 2>/dev/null || true)
+    fi
+    if ! install_tree_secure "$INSTALL_DIR" || [ "$installed_commit" != "$BOOTSTRAP_COMMIT" ]; then
+      if [ -n "$installed_commit" ] && [ "$installed_commit" != "$BOOTSTRAP_COMMIT" ]; then
+        echo "Refreshing installed rutrix tree from $installed_commit to pinned commit $BOOTSTRAP_COMMIT"
+      elif install_tree_secure "$INSTALL_DIR"; then
+        echo "Refreshing installed rutrix tree to pinned commit $BOOTSTRAP_COMMIT"
+      fi
+      clone_installer_tree "$BOOTSTRAP_COMMIT"
+    fi
   fi
 
   install_tree_secure "$INSTALL_DIR" || {
