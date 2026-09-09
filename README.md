@@ -4,6 +4,18 @@
 
 Maintained by **maas3n**. The rutrix-specific implementation, hardening, release work, and ongoing modifications are Copyright (c) 2026 maas3n. This repository also includes MIT-licensed portions from prior work; the required copyright and permission notice is retained in `LICENSE`.
 
+## Stable release
+
+**rutrix v1.0.0** is the current stable release.
+
+Release: https://github.com/maas3n/rutrix/releases/tag/v1.0.0
+
+The v1.0.0 tag targets the validated release commit:
+
+```text
+1509a5f4436dc0f0356ff7f231f4bbfe8f9913fd
+```
+
 ## Stack
 
 - rTorrent **0.16.22**
@@ -29,6 +41,25 @@ After the first install, run:
 ```bash
 sudo rutrix
 ```
+
+The standalone `rutrix.sh` bootstrap is pinned to the tested rutrix release tree rather than silently installing an arbitrary future revision.
+
+## Validated on Debian 13
+
+rutrix v1.0.0 has been tested on a real Debian 13 (Trixie) system, including:
+
+- fresh rutrix-managed user creation
+- rTorrent **0.16.22** service start
+- ruTorrent connectivity through the per-user Unix-domain SCGI socket
+- ruTorrent `env_check.php` with all required checks passing
+- XMLRPC mount point `/RPC2`
+- actual torrent add/use through ruTorrent
+- rTorrent service restart with torrent/session persistence
+- uninstall while preserving the Unix account and complete home directory
+- state transition from `installed=1` to `installed=0`
+- removal of uninstalled users from the uninstall list
+- continued purge eligibility for rutrix-created users after uninstall
+- guarded purge removing the rutrix-created Unix account, complete home directory and rutrix state
 
 ## Menu
 
