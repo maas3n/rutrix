@@ -7,7 +7,7 @@ set -euo pipefail
 VERSION="1.0.0"
 REPO="maas3n/rutrix"
 REPO_URL="https://github.com/${REPO}.git"
-BOOTSTRAP_COMMIT="caf26bba75a4f712fd23876ba71de36446cfd1ef"
+BOOTSTRAP_COMMIT="e29b65a5e91c011cb6f3f5559a39dba0b492f4f1"
 SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
 SELECTED_USER=""
