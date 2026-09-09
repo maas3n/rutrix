@@ -1,0 +1,126 @@
+name: Publish rutrix v1.0.1 hotfix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.head_commit.message == 'Publish rutrix v1.0.1 hotfix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 0
+
+      - name: Prepare v1.0.1 source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('rutrix.sh')
+          s = p.read_text()
+          s = s.replace('# rutrix v1.0.0 - Debian 13 rTorrent + ruTorrent installer/user manager.', '# rutrix v1.0.1 - Debian 13 rTorrent + ruTorrent installer/user manager.', 1)
+          s = s.replace('VERSION="1.0.0"', 'VERSION="1.0.1"', 1)
+          p.write_text(s)
+
+          p = Path('README.md')
+          s = p.read_text()
+          s = s.replace('**rutrix v1.0.0** is the current stable release.', '**rutrix v1.0.1** is the current stable release.')
+          s = s.replace('https://github.com/maas3n/rutrix/releases/tag/v1.0.0', 'https://github.com/maas3n/rutrix/releases/tag/v1.0.1')
+          s = s.replace('The v1.0.0 tag targets the validated release commit:\n\n```text\n1509a5f4436dc0f0356ff7f231f4bbfe8f9913fd\n```', 'v1.0.1 includes the APT-preflight hotfix: repository validation now happens before rutrix creates a new Unix user, so a broken third-party APT source cannot leave a newly created partial account.')
+          s = s.replace('rutrix v1.0.0 has been tested on a real Debian 13 (Trixie) system, including:', 'rutrix v1.0.1 builds on the validated Debian 13 lifecycle from v1.0.0 and adds the APT-preflight hotfix. The tested lifecycle includes:')
+          s = s.replace('rutrix 1.0.0\n==============================', 'rutrix 1.0.1\n==============================')
+          p.write_text(s)
+          PY
+
+          bash -n rutrix.sh
+          bash -n scripts/install-user
+          bash -n scripts/install-rtorrent-0.16.22
+          grep -q 'echo "Checking APT repositories before creating or changing users"' scripts/install-user
+
+          git config user.name "maas3n"
+          git config user.email "291940012+maas3n@users.noreply.github.com"
+          git add rutrix.sh README.md
+          git commit -m "Bump rutrix to v1.0.1"
+          release_tree=$(git rev-parse HEAD)
+          echo "$release_tree" > /tmp/release-tree
+
+      - name: Pin standalone bootstrap to v1.0.1 tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tree=$(cat /tmp/release-tree)
+          python3 - "$release_tree" <<'PY'
+          from pathlib import Path
+          import re, sys
+          target = sys.argv[1]
+          p = Path('rutrix.sh')
+          s = p.read_text()
+          s2, n = re.subn(r'^BOOTSTRAP_COMMIT="[0-9a-f]{40}"$', f'BOOTSTRAP_COMMIT="{target}"', s, count=1, flags=re.M)
+          if n != 1:
+              raise SystemExit('BOOTSTRAP_COMMIT line not found')
+          p.write_text(s2)
+          PY
+          bash -n rutrix.sh
+          git add rutrix.sh
+          git commit -m "Pin v1.0.1 bootstrap tree"
+          git push origin main
+          git rev-parse HEAD > /tmp/release-commit
+
+      - name: Publish v1.0.1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(cat /tmp/release-commit)
+          cat > /tmp/release-notes.md <<EOF
+          # rutrix v1.0.1
+
+          Hotfix release for Debian 13 (Trixie).
+
+          ## Fixed
+
+          - APT repository validation now runs before rutrix creates or changes a dedicated Unix user.
+          - A broken unrelated third-party APT repository therefore aborts installation before `adduser`, avoiding a newly created partial rutrix account.
+          - Standalone `rutrix.sh` is pinned to the corrected v1.0.1 source tree.
+
+          ## Included
+
+          - rTorrent 0.16.22 with matching libtorrent 0.16.22
+          - tinyxml2 XMLRPC backend
+          - ruTorrent + nginx + PHP 8.4 FPM
+          - per-user systemd service and Unix-domain SCGI socket
+          - safe install, uninstall and provenance-guarded purge lifecycle
+
+          ## Install
+
+          \`\`\`bash
+          wget https://raw.githubusercontent.com/maas3n/rutrix/main/rutrix.sh
+          chmod +x rutrix.sh
+          sudo ./rutrix.sh
+          \`\`\`
+
+          Release target: \`$target\`.
+          EOF
+
+          gh release create v1.0.1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$target" \
+            --title "rutrix v1.0.1" \
+            --notes-file /tmp/release-notes.md \
+            --latest
+
+          old_body=$(gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          cat > /tmp/v100-notes.md <<'EOF'
+          > **Superseded by [rutrix v1.0.1](https://github.com/maas3n/rutrix/releases/tag/v1.0.1).** v1.0.1 adds an APT-preflight ordering fix so repository validation occurs before creating a new Unix user.
+
+          EOF
+          printf '%s\n' "$old_body" >> /tmp/v100-notes.md
+          gh release edit v1.0.0 --repo "$GITHUB_REPOSITORY" --notes-file /tmp/v100-notes.md
