@@ -170,4 +170,4 @@ If rutrix is useful to you and you'd like to support its development, Bitcoin do
 
 ## License
 
-MIT. See `LICENSE` for the complete notices and terms.
+rutrix is licensed under the [MIT License](LICENSE). Third-party components remain governed by their own licenses.
